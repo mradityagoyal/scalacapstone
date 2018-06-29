@@ -56,7 +56,6 @@ object Station {
     val wbanId = if (split.length < 2) None else Some(split(1))
     val lat = if(split.length < 3) None else Some(split(2))
     val long = if(split.length < 4) None else Some(split(3))
-print
     //create location.
     val location = (lat, long) match {
       case (Some(lt), Some(lng)) => Some(Location(lt.toDouble, lng.toDouble))
