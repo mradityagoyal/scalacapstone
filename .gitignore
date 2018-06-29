@@ -2,3 +2,4 @@
 *.log
 resources/
 libraries/
+target/
