@@ -43,7 +43,7 @@ case class CellPoint(x: Double, y: Double)
   */
 case class Color(red: Int, green: Int, blue: Int)
 
-case class Station(stnIdentifier: String, wbanIdentifier: Option[String], location: Option[Location])
+case class Station(stnIdentifier: String, wbanIdentifier: String, location: Option[Location])
 
 object Station {
 
@@ -53,7 +53,7 @@ object Station {
     //split by ,
     val split = line.split(",")
     val stnId = split.head
-    val wbanId = if (split.length < 2) None else Some(split(1))
+    val wbanId = if (split.length < 2) "" else split(1)
     val lat = if(split.length < 3) None else Some(split(2))
     val long = if(split.length < 4) None else Some(split(3))
     //create location.

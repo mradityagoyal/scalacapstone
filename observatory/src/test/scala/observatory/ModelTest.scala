@@ -3,7 +3,9 @@ package observatory
 import org.apache.commons.lang3.StringUtils
 import org.scalatest.FunSuite
 
-class ModelTest extends FunSuite {
+import scala.io.Source
+
+trait ModelTest extends FunSuite {
 
   test("Temperature reading is parsed"){
 
@@ -53,6 +55,7 @@ class ModelTest extends FunSuite {
                   |007034,,,
                   |007037,,,
                   |007044,,,"""
+
 
     val lines = input.lines.map(StringUtils.strip)
 

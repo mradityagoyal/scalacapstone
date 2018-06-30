@@ -1,16 +1,32 @@
 package observatory
 
+import java.io.File
 import java.time.LocalDate
 
+import org.apache.log4j.{Level, LogManager, Logger}
 import org.apache.spark.SparkContext
 import org.apache.spark.rdd.RDD
+import org.apache.spark.sql.SparkSession
 
 /**
   * 1st milestone: data extraction
   */
 object Extraction {
 
-  val sc: SparkContext = ???
+  Logger.getLogger("org.apache.spark").setLevel(Level.WARN)
+
+  private val log = LogManager.getRootLogger
+  log.setLevel(Level.WARN)
+
+
+  val spark: SparkSession =
+    SparkSession
+      .builder()
+      .appName("Observatory")
+      .config("spark.master", "local")
+      .getOrCreate()
+
+  val sc: SparkContext = spark.sparkContext
 
   /**
     * @param year             Year number
@@ -19,66 +35,81 @@ object Extraction {
     * @return A sequence containing triplets (date, location, temperature)
     */
   def locateTemperatures(year: Year, stationsFile: String, temperaturesFile: String): Iterable[(LocalDate, Location, Temperature)] = {
-    locateTemperaturesRDD(year, stationsFile, temperaturesFile).collect().toSeq
+    locateTemperaturesSpark(year, sc.textFile(filePath(stationsFile)), sc.textFile(filePath(temperaturesFile))).collect().toSeq
   }
 
-  def locateTemperaturesRDD(year: Year, stationsFile: String, temperaturesFile: String): RDD[(LocalDate, Location, Temperature)] = {
+  /**
+    * @param year             Year number
+    * @param stations    RDD of stations file line
+    * @param temperatures RDD Of temp file lines.
+    * @return A RDD containing triplets (date, location, temperature)
+    */
+  def locateTemperaturesSpark(year: Year, stations: RDD[String], temperatures: RDD[String]): RDD[(LocalDate, Location, Temperature)] = {
 
     //Station.csv
     //STN identifier	WBAN identifier	Latitude	Longitude
     //read the stations file and parse each line to a @{Station}
-    //    val stations: RDD[Station] = sc.textFile(stationsFile) map Station.parseLine
-    val stations: RDD[((String, String), Location)] = sc.textFile(stationsFile)
-      .map(_.split(","))
-      .map {
-        case split => {
-          val stnId = split.head
-          val wbanId = if (split.length < 2) "" else split(1)
-          val lat = if (split.length < 3) None else Some(split(2))
-          val long = if (split.length < 4) None else Some(split(3))
-          //create location.
-          val location = (lat, long) match {
-            case (Some(lt), Some(lng)) => Some(Location(lt.toDouble, lng.toDouble))
-            case _ => None
-          }
-
-          ((stnId, wbanId), location)
-        }
-      }.filter(_._2 != None)
-      .map {
-        case (id, maybeLoc) => (id, maybeLoc.get)
+    val keydLocations: RDD[((String, String), Location)] = stations.filter(!_.isEmpty).map(_.split(","))
+      .filter(_.length == 4)
+      .map{
+        case Array(stnId, wabnId, lat, long) => ((stnId, wabnId), Location(lat.toDouble, long.toDouble))
       }
-
-    val keyed: RDD[((String, String), ((String, String), Location))] = stations.keyBy(_._1)
-
-
 
     //Temperatures
     //STN identifier	WBAN identifier	Month	Day	Temperature (in degrees Fahrenheit)
-    val temperatures: RDD[((String, String), LocalDate, Temperature)] = sc.textFile(temperaturesFile)
-        .map{
-          case line => {
-            val Array(stnId, wbanId, month, day, tempF) = line.split(",")
-            val date =  LocalDate.of(year, month.toInt, day.toInt)
-            //convert to celcious and round to 4 places
-            val tempC: Double = (tempF.toDouble - 32) * 5 / 9
-            val temp: Temperature = BigDecimal.valueOf(tempC).setScale(4, BigDecimal.RoundingMode.HALF_UP).toDouble
-            ((stnId, wbanId), date, temp)
-          }
-        }
+    val keydTemp: RDD[((String, String), (String, String, LocalDate, Temperature))] = temperatures.filter(!_.isEmpty)
+      .map(_.split(","))
+      .filter(_.length == 5)
+      .map {
+        case Array(stnId, wbanId, month, day, tempF) =>
+          val date = LocalDate.of(year, month.toInt, day.toInt)
+          //convert to celcious and round to 4 places
+          val tempC: Double = (tempF.toDouble - 32) * 5 / 9
+//          val temp: Temperature = BigDecimal.valueOf(tempC).setScale(4, BigDecimal.RoundingMode.HALF_UP).toDouble
+          val temp: Temperature = tempC
+          (stnId, wbanId, date, temp)
+      }.keyBy(t => (t._1, t._2))
 
-    stations
-
-    ???
+    val joined: RDD[((String,String), (Location, (String, String, LocalDate, Temperature)))] = keydLocations.join(keydTemp)
+    joined.map {
+      case (id, (loc, (stId, wabnId, date, temp))) => (date, loc, temp)
+    }
   }
 
-  /** Station
+  /**
     *
     * @param records A sequence containing triplets (date, location, temperature)
     * @return A sequence containing, for each location, the average temperature over the year.
     */
   def locationYearlyAverageRecords(records: Iterable[(LocalDate, Location, Temperature)]): Iterable[(Location, Temperature)] = {
-    ???
+    locationYearlyAverageRecordsSpark(sc.parallelize(records.toSeq)).collect.toSeq
   }
+
+
+  /**
+    *
+    * @param records A sequence containing triplets (date, location, temperature)
+    * @return A sequence containing, for each location, the average temperature over the year.
+    */
+  def locationYearlyAverageRecordsSpark(records: RDD[(LocalDate, Location, Temperature)]): RDD[(Location, Temperature)] = {
+    records.map{
+      case (_, loc, temp) => (loc , (temp, 1L))
+    }.reduceByKey{
+      case ((t1, c1), (t2, c2)) => (t1 + t2, c1+c2)
+    }.map{
+      case (loc, (tempSum, count)) =>
+//        val avgTemp = BigDecimal.valueOf(tempSum / count).setScale(4, BigDecimal.RoundingMode.HALF_UP).toDouble
+        val avgTemp = tempSum / count
+        (loc, avgTemp)
+    }
+  }
+
+
+  def filePath(fileName: String) = {
+    val resource = this.getClass.getClassLoader.getResource(fileName.tail)
+    if (resource == null) sys.error("Please download the dataset as explained in the assignment instructions")
+    new File(resource.toURI).getPath
+  }
+
 
 }
